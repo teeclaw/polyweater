@@ -1,0 +1,95 @@
+version: '3.8'
+
+networks:
+  polyweather-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: polyweather-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-polyweather}
+      POSTGRES_USER: ${POSTGRES_USER:-polyweather_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secure_password_2024}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d
+    ports:
+      - "5433:5432"
+    networks:
+      - polyweather-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-polyweather_user}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: polyweather-redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6380:6379"
+    networks:
+      - polyweather-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  polyweather-bot:
+    build: .
+    container_name: polyweather-bot
+    restart: unless-stopped
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-polyweather}
+      - POSTGRES_USER=${POSTGRES_USER:-polyweather_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-secure_password_2024}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - DEVELOPMENT_MODE=${DEVELOPMENT_MODE:-false}
+      - PAPER_TRADING=${PAPER_TRADING:-true}
+      - STARTING_CAPITAL=${STARTING_CAPITAL:-50.00}
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - polyweather-network
+    depends_on:
+      - postgres
+      - redis
+    ports:
+      - "8080:8080"
+      - "8765:8765"
+
+  streamlit-dashboard:
+    build: .
+    container_name: polyweather-streamlit
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    environment:
+      - STREAMLIT_SERVER_HEADLESS=true
+      - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+      - STREAMLIT_GLOBAL_DEVELOPMENT_MODE=false
+      - API_BASE_URL=http://polyweather-bot:8080
+    networks:
+      - polyweather-network
+    depends_on:
+      - polyweather-bot
+    command: ["./scripts/start-streamlit.sh"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
