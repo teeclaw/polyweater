@@ -1,0 +1,65 @@
+# PolyWeather Fail2ban Configuration
+# Protection against brute force attacks
+
+[DEFAULT]
+# Ban settings
+bantime = 3600
+findtime = 600
+maxretry = 3
+
+# Email notifications (optional)
+# destemail = admin@your-domain.com
+# sender = fail2ban@your-domain.com
+
+# Action shortcuts
+action = %(action_)s
+
+[nginx-http-auth]
+enabled = true
+port = http,https
+logpath = /var/log/nginx/access.log
+filter = nginx-http-auth
+maxretry = 3
+bantime = 3600
+
+[nginx-limit-req]
+enabled = true
+port = http,https
+logpath = /var/log/nginx/error.log
+filter = nginx-limit-req
+maxretry = 3
+bantime = 3600
+
+[nginx-botsearch]
+enabled = true
+port = http,https
+logpath = /var/log/nginx/access.log
+filter = nginx-botsearch
+maxretry = 2
+bantime = 7200
+
+[sshd]
+enabled = true
+port = ssh
+logpath = /var/log/auth.log
+filter = sshd
+maxretry = 3
+bantime = 3600
+
+[polyweather-api]
+enabled = true
+port = 8080,443
+logpath = /var/log/nginx/access.log
+filter = polyweather-api
+maxretry = 5
+bantime = 1800
+findtime = 300
+
+[polyweather-auth]
+enabled = true
+port = 8080,443
+logpath = /var/log/nginx/access.log
+filter = polyweather-auth
+maxretry = 3
+bantime = 7200
+findtime = 600

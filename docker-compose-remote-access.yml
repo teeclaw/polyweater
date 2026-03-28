@@ -1,0 +1,323 @@
+version: '3.8'
+
+# PolyWeather Secure Remote Access Configuration
+# Extends docker-compose-secure.yml with reverse proxy and SSL termination
+
+# Secure secrets management
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password.txt
+  postgres_user:
+    file: ./secrets/postgres_user.txt
+  redis_password:
+    file: ./secrets/redis_password.txt
+  jwt_secret:
+    file: ./secrets/jwt_secret.txt
+  api_keys:
+    file: ./secrets/api_keys.txt
+
+services:
+  # Include all services from secure deployment
+  postgres:
+    image: postgres:15-alpine
+    container_name: polyweather-postgres-secure
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: polyweather
+      POSTGRES_USER_FILE: /run/secrets/postgres_user
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+    secrets:
+      - postgres_password
+      - postgres_user
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d
+      - ./database/config/postgresql-secure.conf:/etc/postgresql/postgresql.conf
+      - ./ssl:/var/lib/postgresql/ssl:ro
+    ports:
+      - "127.0.0.1:5433:5432"
+    command: postgres -c config_file=/etc/postgresql/postgresql.conf -c ssl=on -c ssl_cert_file=/var/lib/postgresql/ssl/polyweather.crt -c ssl_key_file=/var/lib/postgresql/ssl/polyweather.key
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U polyweather_trader -d polyweather"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - polyweather-network
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql
+    user: postgres
+
+  redis:
+    image: redis:7-alpine
+    container_name: polyweather-redis-secure
+    restart: unless-stopped
+    secrets:
+      - redis_password
+    ports:
+      - "127.0.0.1:6380:6379"
+    volumes:
+      - redis_data:/data
+      - ./redis/config/redis-secure.conf:/etc/redis/redis.conf:ro
+    command: redis-server /etc/redis/redis.conf --requirepass pass123
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "pass123", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - polyweather-network
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    user: redis
+
+  polyweather-bot:
+    build: 
+      context: .
+      dockerfile: Dockerfile.secure
+    container_name: polyweather-trading-bot-secure
+    restart: unless-stopped
+    secrets:
+      - postgres_password
+      - postgres_user
+      - redis_password
+      - jwt_secret
+      - api_keys
+    environment:
+      - DATABASE_URL=postgresql://polyweather_trader:***@postgres:5432/polyweather?sslmode=require
+      - REDIS_URL=redis://:pass123@redis:6379/0
+      - JWT_SECRET_FILE=/run/secrets/jwt_secret
+      - API_KEYS_FILE=/run/secrets/api_keys
+      - PYTHONPATH=/app/src
+      - LOG_LEVEL=INFO
+      - TRADING_MODE=SECURE
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data:ro
+    ports:
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8765:8765"
+    networks:
+      - polyweather-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /app/tmp
+    user: "1000:1000"
+
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile.secure
+    container_name: polyweather-dashboard-secure
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:80"
+    environment:
+      - REACT_APP_API_URL=https://localhost:8080
+      - REACT_APP_WS_URL=wss://localhost:8765
+      - NODE_ENV=production
+    networks:
+      - polyweather-network
+    depends_on:
+      - polyweather-bot
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run
+    user: "101:101"
+
+  # Nginx reverse proxy with SSL termination
+  nginx-proxy:
+    image: nginx:alpine
+    container_name: polyweather-nginx-proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"      # HTTP (redirects to HTTPS)
+      - "443:443"    # HTTPS
+      - "8443:8443"  # Alternative HTTPS port
+    volumes:
+      - ./nginx/nginx-secure.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+      - nginx_cache:/var/cache/nginx
+      - nginx_logs:/var/log/nginx
+    networks:
+      - polyweather-network
+    depends_on:
+      - dashboard
+      - polyweather-bot
+      - monitoring
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run
+      - /etc/nginx/conf.d
+    user: nginx
+
+  # Monitoring
+  monitoring:
+    image: prom/prometheus:latest
+    container_name: polyweather-monitoring-secure
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./monitoring/prometheus-secure.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+      - '--web.external-url=https://localhost/monitoring'
+      - '--web.route-prefix=/monitoring'
+    networks:
+      - polyweather-network
+    depends_on:
+      - postgres
+      - redis
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    user: nobody
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter
+    container_name: polyweather-postgres-exporter-secure
+    restart: unless-stopped
+    secrets:
+      - postgres_password
+      - postgres_user
+    environment:
+      DATA_SOURCE_NAME: "postgresql://$(cat /run/secrets/postgres_user):***@postgres:5432/polyweather?sslmode=require"
+    ports:
+      - "127.0.0.1:9187:9187"
+    networks:
+      - polyweather-network
+    depends_on:
+      - postgres
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    user: nobody
+
+  redis-exporter:
+    image: oliver006/redis_exporter
+    container_name: polyweather-redis-exporter-secure
+    restart: unless-stopped
+    secrets:
+      - redis_password
+    environment:
+      REDIS_ADDR: "redis://redis:6379"
+      REDIS_PASSWORD_FILE: "/run/secrets/redis_password"
+    ports:
+      - "127.0.0.1:9121:9121"
+    networks:
+      - polyweather-network
+    depends_on:
+      - redis
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    user: nobody
+
+  # Fail2ban for additional security
+  fail2ban:
+    image: crazymax/fail2ban:latest
+    container_name: polyweather-fail2ban
+    restart: unless-stopped
+    network_mode: "host"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    volumes:
+      - ./fail2ban:/data
+      - nginx_logs:/var/log/nginx:ro
+      - /var/log:/var/log/host:ro
+    environment:
+      - TZ=UTC
+      - F2B_LOG_LEVEL=INFO
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  postgres_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/postgres
+  redis_data:
+    driver: local
+    driver_opts:
+      type: none  
+      o: bind
+      device: ./data/redis
+  prometheus_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/prometheus
+  nginx_cache:
+    driver: local
+  nginx_logs:
+    driver: local
+
+networks:
+  polyweather-network:
+    driver: bridge
+    enable_ipv6: false
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/24
+          gateway: 172.20.0.1
+    internal: false
+    attachable: false
+    driver_opts:
+      com.docker.network.bridge.enable_icc: "true"
+      com.docker.network.bridge.enable_ip_masquerade: "true"

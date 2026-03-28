@@ -1,0 +1,26 @@
+# Security dependencies for PolyWeather trading bot
+# Install with: pip install -r requirements-security.txt
+
+# Cryptographic libraries
+cryptography>=41.0.0
+PyJWT>=2.8.0
+
+# TOTP authentication
+qrcode>=7.4.2
+Pillow>=10.0.0
+
+# Rate limiting and caching
+aioredis>=5.0.0
+
+# Web security
+fastapi>=0.100.0
+uvicorn[standard]>=0.23.0
+
+# Password hashing (if needed for future user authentication)
+bcrypt>=4.0.0
+
+# Network security
+httpx>=0.25.0
+
+# Monitoring and logging
+structlog>=23.1.0
