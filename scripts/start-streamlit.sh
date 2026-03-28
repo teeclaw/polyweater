@@ -28,7 +28,8 @@ echo -e "  Host: 0.0.0.0"
 echo -e "${GREEN}✅ Starting Streamlit server...${NC}"
 
 # Start Streamlit with proper configuration
-python -m streamlit run streamlit_dashboard.py \
+# Use echo to provide blank email when prompted
+echo "" | python -m streamlit run streamlit_dashboard.py \
     --server.port=8501 \
     --server.address=0.0.0.0 \
     --server.headless=true \
