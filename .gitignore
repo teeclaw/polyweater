@@ -43,6 +43,10 @@ ENV/
 # Environment variables
 .env
 .env.local
+.env.production
+
+# Secrets directory (NEVER commit - contains API keys)
+secrets/
 
 # Cache
 .cache/

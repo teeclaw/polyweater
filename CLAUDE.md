@@ -97,9 +97,10 @@ docker-compose -f docker-compose-secure.yml up -d
 - **Port 6380**: Redis cache
 
 ### Authentication
-- **Dashboard Login**: `trader` / `polyweather2024`
-- **Database**: `polyweather_user` / `secure...2024`
-- **API Keys**: Stored in `.env` file (copy from `.env.example`)
+- **Dashboard Login**: Set via `DASHBOARD_USER` / `DASHBOARD_PASSWORD` in `.env.local`
+- **Database**: Set via `POSTGRES_USER` / `POSTGRES_PASSWORD` in `.env.local`
+- **API Keys**: Stored in `.env.local` file (NEVER commit to git!)
+- **⚠️  SECURITY**: All credentials are in `.env.local` which is gitignored. Never hardcode passwords.
 
 ### Key Environment Variables
 ```bash
